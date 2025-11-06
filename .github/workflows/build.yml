@@ -1,4 +1,4 @@
-name: OneCloud ImmortalWrt\
+name: OneCloud ImmortalWrt 
 
 on:
   workflow_dispatch:
