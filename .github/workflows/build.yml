@@ -1,4 +1,4 @@
-name: Build OneCloud ImmortalWrt (Extreme Space Optimized)
+name:OneCloud ImmortalWrt
 
 on:
   schedule:
