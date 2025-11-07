@@ -1,443 +1,55 @@
-name: Build ImmortalWrt for OneCloud
+name: Build OneCloud ImmortalWrt (Kernel 6.0)
 
 on:
-  push:
-    branches: [ main, master ]
   schedule:
-    # 每月1号凌晨2点自动编译
-    - cron: '0 2 1 * *'
-  workflow_dispatch:
+    - cron: '0 16 * * *'   # 每日北京时间 00:00 自动构建
+  workflow_dispatch:        # 手动触发支持
     inputs:
       kernel_version:
-        description: 'Linux Kernel Version'
+        description: '选择内核版本'
         required: true
-        default: '6.6'
-        type: choice
+        默认: '6.0'
+        输入: choice
         options:
-          - '6.6'
-          - '6.10'
-          - '6.12'
-      clean_build:
-        description: 'Clean Build'
-        required: true
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-
-env:
-  DEVICE: xunlong_orangepi-one
-  ARCH: sunxi/cortexa7
-  IMMORTALWRT_VERSION: 24.10
-  IP_ADDRESS: 192.168.2.2
-  USERNAME: root
-  PASSWORD: ''
+          - 6.0
+          - 6.6
+          - 6.10
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 180
-    
+    runs-on: ubuntu-20.04
+
     steps:
-    - name: Checkout source code
+    - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Clean previous build
-      if: github.event.inputs.clean_build == 'true'
-      run: |
-        sudo rm -rf immortalwrt build-cache
-
-    - name: Install dependencies
+    - name: 初始化编译环境
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib \
-        g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-distutils \
-        rsync unzip zlib1g-dev file wget curl upx-ucl e2fsprogs fdisk
+        sudo apt-get install -y build-essential gcc g++ flex bison gawk gettext unzip zlib1g-dev file python3 rsync qemu-utils
 
-    - name: Clone ImmortalWrt
+    - name: 更新 feeds
       run: |
-        git clone https://github.com/immortalwrt/immortalwrt.git
-        cd immortalwrt
-        git checkout v${{ env.IMMORTALWRT_VERSION }} || git checkout master
-
-    - name: Update feeds from official source
-      run: |
-        cd immortalwrt
+        ./scripts/feeds clean
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Create custom configuration
+    - name: 执行自定义脚本
       run: |
-        cd immortalwrt
-        cat > .config << EOF
-CONFIG_TARGET_sunxi=y
-CONFIG_TARGET_sunxi_cortexa7=y
-CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y
+        chmod +x diy.sh
+        ./diy.sh
 
-# 使用 EXT4 文件系统支持大容量存储
-CONFIG_TARGET_ROOTFS_EXT4FS=y
-CONFIG_TARGET_ROOTFS_SQUASHFS=n
-CONFIG_TARGET_EXT4_RESERVED_PCT=0
-CONFIG_TARGET_EXT4_BLOCKSIZE_4K=y
-CONFIG_TARGET_ROOTFS_PARTSIZE=7000
+    - name: 载入配置文件
+      run: cp .config build_dir/.config || true
 
-# 内核版本选择
-${{ github.event.inputs.kernel_version == '6.6' && 'CONFIG_LINUX_6_6=y' || '' }}
-${{ github.event.inputs.kernel_version == '6.10' && 'CONFIG_LINUX_6_10=y' || '' }}
-${{ github.event.inputs.kernel_version == '6.12' && 'CONFIG_LINUX_6_12=y' || '' }}
-
-# 基础 LuCI 界面
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-ssl-openssl=y
-CONFIG_PACKAGE_luci-app-firewall=y
-CONFIG_PACKAGE_luci-app-upnp=y
-CONFIG_PACKAGE_luci-app-dockerman=y
-
-# 必需软件包
-CONFIG_PACKAGE_nikki=y
-CONFIG_PACKAGE_ttyd=y
-CONFIG_PACKAGE_docker=y
-CONFIG_PACKAGE_dockerd=y
-CONFIG_PACKAGE_docker-compose=y
-
-# Docker 相关依赖
-CONFIG_PACKAGE_containerd=y
-CONFIG_PACKAGE_runc=y
-CONFIG_PACKAGE_libdevmapper=y
-CONFIG_PACKAGE_liblzo=y
-CONFIG_PACKAGE_tini=y
-CONFIG_PACKAGE_cgroupfs-mount=y
-
-# 存储支持
-CONFIG_PACKAGE_fdisk=y
-CONFIG_PACKAGE_blkid=y
-CONFIG_PACKAGE_e2fsprogs=y
-CONFIG_PACKAGE_resize2fs=y
-CONFIG_PACKAGE_kmod-fs-ext4=y
-CONFIG_PACKAGE_kmod-fs-vfat=y
-CONFIG_PACKAGE_kmod-fs-exfat=y
-CONFIG_PACKAGE_kmod-usb-storage=y
-CONFIG_PACKAGE_kmod-usb2=y
-CONFIG_PACKAGE_kmod-usb3=y
-
-# 网络工具
-CONFIG_PACKAGE_curl=y
-CONFIG_PACKAGE_wget-ssl=y
-CONFIG_PACKAGE_openssh-sftp-server=y
-
-# 系统工具
-CONFIG_PACKAGE_htop=y
-CONFIG_PACKAGE_nano=y
-CONFIG_PACKAGE_bash=y
-CONFIG_PACKAGE_ca-certificates=y
-
-# 内核模块
-CONFIG_PACKAGE_kmod-ipt-offload=y
-CONFIG_PACKAGE_kmod-nf-conntrack=y
-CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
-EOF
-
-    - name: Create storage expansion scripts
+    - name: 开始编译固件
       run: |
-        cd immortalwrt
-        mkdir -p files/etc/uci-defaults files/etc/init.d files/usr/bin /opt/docker /opt/software
-        
-        # 自动扩展根分区脚本
-        cat > files/etc/uci-defaults/10-auto-expand-rootfs << 'EOF'
-#!/bin/sh
-
-LOG_FILE="/tmp/auto-expand-rootfs.log"
-echo "$(date): Starting automatic rootfs expansion" > $LOG_FILE
-
-# 获取根分区设备
-ROOT_DEV=$(mount | grep ' / ' | awk '{print $1}')
-if [ -z "$ROOT_DEV" ]; then
-    ROOT_DEV=$(blkid -L rootfs || blkid -L ROOTFS || echo "")
-fi
-
-if [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
-    echo "Found root device: $ROOT_DEV" >> $LOG_FILE
-    
-    # 获取磁盘设备
-    DISK_DEV=$(lsblk -no PKNAME $ROOT_DEV | head -1)
-    if [ -n "$DISK_DEV" ]; then
-        DISK_DEV="/dev/$DISK_DEV"
-        echo "Disk device: $DISK_DEV" >> $LOG_FILE
-        
-        # 使用 parted 扩展分区
-        if command -v parted >/dev/null; then
-            # 获取分区号
-            PART_NUM=$(echo $ROOT_DEV | grep -o '[0-9]*$')
-            if [ -n "$PART_NUM" ]; then
-                # 删除分区并重新创建为最大尺寸
-                parted -s $DISK_DEV "rm $PART_NUM" >> $LOG_FILE 2>&1
-                parted -s $DISK_DEV "mkpart primary ext4 100MB 100%" >> $LOG_FILE 2>&1
-                
-                # 重新探测分区
-                partprobe $DISK_DEV >> $LOG_FILE 2>&1
-                sleep 3
-                
-                # 检查并修复文件系统
-                e2fsck -y -f $ROOT_DEV >> $LOG_FILE 2>&1
-                
-                # 调整文件系统大小
-                resize2fs $ROOT_DEV >> $LOG_FILE 2>&1
-                
-                echo "Rootfs expansion completed successfully" >> $LOG_FILE
-            fi
-        fi
-    fi
-else
-    echo "Could not find valid root device" >> $LOG_FILE
-fi
-
-# 显示最终磁盘空间
-echo "Final disk usage:" >> $LOG_FILE
-df -h >> $LOG_FILE
-
-# 创建优化目录结构
-mkdir -p /opt/docker/{containers,volumes,images,networks}
-mkdir -p /opt/software/{bin,scripts,configs}
-mkdir -p /opt/data
-
-# 设置 Docker 数据目录
-if [ -f /usr/bin/dockerd ]; then
-    /etc/init.d/docker stop >/dev/null 2>&1
-    sleep 2
-    
-    mkdir -p /etc/docker
-    cat > /etc/docker/daemon.json << DOCKER_EOF
-{
-  "data-root": "/opt/docker",
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  },
-  "storage-driver": "overlay2",
-  "iptables": true,
-  "ip-masq": true
-}
-DOCKER_EOF
-    
-    /etc/init.d/docker start >/dev/null 2>&1
-    echo "Docker configured with data directory: /opt/docker" >> $LOG_FILE
-fi
-
-echo "Storage optimization completed at $(date)" >> $LOG_FILE
-exit 0
-EOF
-
-        # 网络配置脚本
-        cat > files/etc/uci-defaults/99-network-config << EOF
-#!/bin/sh
-
-# 设置 LAN IP
-uci set network.lan.ipaddr='${{ env.IP_ADDRESS }}'
-uci commit network
-
-# 设置空密码
-uci -q delete system.@system[0].password
-uci commit system
-
-# 启用 SSH
-uci set dropbear.@dropbear[0].PasswordAuth='on'
-uci set dropbear.@dropbear[0].RootPasswordAuth='on'
-uci commit dropbear
-
-# 设置时区
-uci set system.@system[0].timezone='CST-8'
-uci set system.@system[0].zonename='Asia/Shanghai'
-uci commit system
-
-# 启用 ttyd
-uci set ttyd.@ttyd[0].enable='1'
-uci commit ttyd
-
-exit 0
-EOF
-
-        chmod +x files/etc/uci-defaults/10-auto-expand-rootfs
-        chmod +x files/etc/uci-defaults/99-network-config
-
-    - name: Build configuration
-      run: |
-        cd immortalwrt
         make defconfig
-        make kernel_oldconfig
+        make download -j8
+        make -j$(nproc) || make -j1 V=s
 
-    - name: Download packages
-      run: |
-        cd immortalwrt
-        make download -j$(nproc)
-        find dl/ -size -1024c -exec rm -f {} \;
-
-    - name: Build firmware
-      run: |
-        cd immortalwrt
-        make -j$(($(nproc) + 1)) V=s
-
-    - name: Prepare flashable package
-      run: |
-        cd immortalwrt/bin/targets/sunxi/cortexa7
-        BUILD_DATE=$(date +%Y%m%d)
-        RELEASE_DIR="onecloud-immortalwrt-${BUILD_DATE}"
-        
-        mkdir -p $RELEASE_DIR
-        
-        # 复制所有固件文件
-        cp *.img *.bin *.gz *.manifest $RELEASE_DIR/ 2>/dev/null || true
-        
-        # 创建详细说明
-        cat > $RELEASE_DIR/README.md << EOF
-# OneCloud ImmortalWrt Firmware
-
-## Build Information
-- **Device**: OneCloud (Xunlong Orange Pi One)
-- **Architecture**: ARMv7 32-bit
-- **ImmortalWrt Version**: ${{ env.IMMORTALWRT_VERSION }}
-- **Kernel Version**: ${{ github.event.inputs.kernel_version }}
-- **Build Date**: $(date)
-- **GitHub Run**: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-## Default Settings
-- **IP Address**: ${{ env.IP_ADDRESS }}
-- **Username**: ${{ env.USERNAME }}
-- **Password**: (empty)
-
-## Pre-installed Packages
-- LuCI Web Interface
-- Nikki
-- TTYD Web Terminal
-- Docker & Dockerman
-- Auto storage expansion
-
-## Flash Instructions
-1. Use \`factory.img\` for initial flashing
-2. Device will automatically:
-   - Expand rootfs to use full 8GB storage
-   - Configure Docker to use /opt/docker
-   - Create optimized directory structure
-
-## Storage Layout
-- RootFS automatically expands to ~7GB
-- Docker data: /opt/docker
-- Software: /opt/software
-- All remaining space is available for applications
-
-## Web Interfaces
-- LuCI: http://${{ env.IP_ADDRESS }}
-- TTYD: http://${{ env.IP_ADDRESS }}:7681
-EOF
-
-    - name: Create compressed release
-      run: |
-        cd immortalwrt/bin/targets/sunxi/cortexa7
-        BUILD_DATE=$(date +%Y%m%d_%H%M)
-        RELEASE_NAME="onecloud-immortalwrt-${{ env.IMMORTALWRT_VERSION }}-k${{ github.event.inputs.kernel_version }}-${BUILD_DATE}"
-        
-        tar -czf ${RELEASE_NAME}.tar.gz onecloud-immortalwrt-*/
-        sha256sum ${RELEASE_NAME}.tar.gz > ${RELEASE_NAME}.sha256sum
-        
-        # 创建版本信息
-        cat > version-info.json << EOF
-{
-  "version": "${{ env.IMMORTALWRT_VERSION }}",
-  "kernel": "${{ github.event.inputs.kernel_version }}",
-  "architecture": "armv7",
-  "device": "onecloud",
-  "build_date": "$(date -Iseconds)",
-  "features": [
-    "luci",
-    "nikki", 
-    "ttyd",
-    "docker",
-    "auto-expand-rootfs",
-    "large-storage"
-  ],
-  "default_ip": "${{ env.IP_ADDRESS }}",
-  "username": "${{ env.USERNAME }}",
-  "password": ""
-}
-EOF
-
-    - name: Upload artifacts
+    - name: 上传固件到 Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: onecloud-${{ env.IMMORTALWRT_VERSION }}-k${{ github.event.inputs.kernel_version }}
-        path: |
-          immortalwrt/bin/targets/sunxi/cortexa7/onecloud-immortalwrt-*.tar.gz
-          immortalwrt/bin/targets/sunxi/cortexa7/*.sha256sum
-          immortalwrt/bin/targets/sunxi/cortexa7/version-info.json
-        retention-days: 5
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: success()
-    
-    steps:
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: ./artifacts
-
-    - name: List files for debugging
-      run: ls -la ./artifacts/
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: onecloud-${{ env.IMMORTALWRT_VERSION }}-$(date +%Y%m%d)
-        name: OneCloud ImmortalWrt ${{ env.IMMORTALWRT_VERSION }} $(date +%Y-%m-%d)
-        body: |
-          # OneCloud ImmortalWrt ${{ env.IMMORTALWRT_VERSION }}
-          
-          **Automated Monthly Build**
-          
-          ## Build Information
-          - **Kernel**: ${{ github.event.inputs.kernel_version }}
-          - **Architecture**: ARMv7 32-bit
-          - **Build Date**: $(date)
-          
-          ## Default Settings
-          - IP: ${{ env.IP_ADDRESS }}
-          - User: ${{ env.USERNAME }}
-          - Password: (empty)
-          
-          ## Features
-          - ✅ LuCI Web Interface
-          - ✅ Nikki
-          - ✅ TTYD Web Terminal  
-          - ✅ Docker & Dockerman
-          - ✅ Auto storage expansion (uses full 8GB)
-          - ✅ Monthly auto-update
-          
-          ## Flash Instructions
-          1. Download the `.tar.gz` file
-          2. Extract and use `factory.img` for flashing
-          3. Connect to http://${{ env.IP_ADDRESS }} after boot
-          
-          **Note**: This release will be automatically replaced next month.
-        files: |
-          ./artifacts/onecloud-${{ env.IMMORTALWRT_VERSION }}-k${{ github.event.inputs.kernel_version }}/*.tar.gz
-          ./artifacts/onecloud-${{ env.IMMORTALWRT_VERSION }}-k${{ github.event.inputs.kernel_version }}/*.sha256sum
-          ./artifacts/onecloud-${{ env.IMMORTALWRT_VERSION }}-k${{ github.event.inputs.kernel_version }}/version-info.json
-        draft: false
-        prerelease: false
-        replace_assets: true
-
-  cleanup:
-    needs: release
-    runs-on: ubuntu-latest
-    if: always()
-    
-    steps:
-    - name: Delete old releases
-      uses: dev-drprasad/delete-old-releases@v0.2.0
-      with:
-        keep_latest: 3
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        name: OneCloud-ImmortalWrt-${{ github.run_id }}
+        path: bin/targets/
