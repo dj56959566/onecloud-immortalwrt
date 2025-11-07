@@ -1,84 +1,57 @@
 name: Build OneCloud ImmortalWrt (Kernel 6.6)
 
 on:
-  schedule:
-    - cron: '0 16 * * *'  # 每天北京时间 00:00 自动构建
-  workflow_dispatch:
-    inputs:
-      kernel_version:
-        description: '选择内核版本'
-        required: true
-        default: '6.6'
-        type: choice
-        options:
-          - 6.6
-          - 6.7
-          - 6.9
+schedule:
+- cron: '0 16 * * *'  # 每天北京时间 00:00 自动构建
+workflow_dispatch:
+inputs:
+kernel_version:
+description: '选择内核版本'
+required: true
+default: '6.6'
+type: choice
+options:
+- 6.6
+- 6.7
+- 6.9
 
 jobs:
-  build:
+build:
     runs-on: ubuntu-latest
-    steps:
-      - name: 检出仓库
-        uses: actions/checkout@v4
+steps:
+- name: 检出仓库
+uses: actions/checkout@v4
 
-      - name: 设置构建环境
-        run: |
-          sudo apt update
-          sudo apt install -y build-essential ccache curl git unzip wget python3
+- name: 设置构建环境
+run: |
+         sudo apt update
+         sudo apt install -y build-essential ccache curl git unzip wget python3
 
-      - name: 下载源码
-        run: |
-          git clone https://github.com/immortalwrt/immortalwrt.git -b openwrt-24.10 openwrt
-          cd openwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+     - name: 下载源码
+run: |
+         git clone https://github.com/immortalwrt/immortalwrt.git -b openwrt-24.10 openwrt
+         cd openwrt
+         ./scripts/feeds update -a
+         ./scripts/feeds install -a
 
-      - name: 应用自定义 diy.sh
-        run: |
-          chmod +x diy.sh
-          cd openwrt
-          ../diy.sh
+     - name: 应用自定义 diy.sh
+run: |
+         chmod +x diy.sh
+         cd openwrt
+         ../diy.sh
 
-      - name: 生成默认配置
-        run: |
-          cd openwrt
-          make defconfig
+     - name: 生成默认配置
+run: |
+         cd openwrt
+         make defconfig
 
-      - name: 编译固件
-        run: |
-          cd openwrt
-          make -j$(nproc) || make -j1 V=s
+     - name: 编译固件
+run: |
+         cd openwrt
+         make -j$(nproc) || make -j1 V=s
 
-            # 上传固件到 Actions Artifacts（保留临时文件供调试）
-      - name: 上传固件到 Actions Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: onecloud-immortalwrt-${{ github.run_id }}
-          path: openwrt/bin/targets/
-
-      # 自动发布到 GitHub Releases（正式发布）
-      - name: 发布到 GitHub Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "onecloud-${{ github.run_number }}"
-          name: "OneCloud ImmortalWrt Build #${{ github.run_number }}"
-          body: |
-            🧊 **每月自动构建版本**
-
-            ✅ 内核版本: ${{ github.event.inputs.kernel_version || '6.6' }}
-            🕒 构建时间: ${{ github.run_started_at }}
-
-            🌐 默认网络配置：
-            - IP：192.168.2.2  
-            - 网关：192.168.2.1  
-            - 用户名：root  
-            - 密码：空（留空登录）
-
-            📦 固件文件请在下方下载：
-          files: |
-            openwrt/bin/targets/**/*.img.gz
-            openwrt/bin/targets/**/*.bin
-            openwrt/bin/targets/**/*.manifest
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+     - name: 上传固件
+uses: actions/upload-artifact@v4
+with:
+name: onecloud-immortalwrt-${{ github.run_id }}
+path: openwrt/bin/targets/
