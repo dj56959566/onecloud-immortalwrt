@@ -1,8 +1,8 @@
-name: Monthly Build & Release OneCloud ImmortalWrt (Kernel 6.6)
+name: Build OneCloud ImmortalWrt (Kernel 6.6)
 
 on:
   schedule:
-    - cron: '0 16 1 * *'   # 每月1日北京时间 00:00 自动构建
+    - cron: '0 16 * * *'  # 每天北京时间 00:00 自动构建
   workflow_dispatch:
     inputs:
       kernel_version:
@@ -12,15 +12,12 @@ on:
         type: choice
         options:
           - 6.6
-          - 6.10
-          - 6.12
-
-permissions:
-  contents: write   # ✅ 允许创建和上传 Release
+          - 6.7
+          - 6.9
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
 
     steps:
       - name: 检出仓库
@@ -31,7 +28,7 @@ jobs:
           sudo apt update
           sudo apt install -y build-essential ccache curl git unzip wget python3 python3-distutils
 
-      - name: 下载源码
+      - name: 下载 ImmortalWrt 源码
         run: |
           git clone https://github.com/immortalwrt/immortalwrt.git -b openwrt-24.10 openwrt
           cd openwrt
@@ -53,44 +50,42 @@ jobs:
         run: |
           cd openwrt
           make -j$(nproc) || make -j1 V=s
-          echo "✅ 构建完成，列出固件文件："
-          find bin/targets/ -type f
+
+      - name: 打包固件压缩包
+        run: |
+          cd openwrt/bin/targets
+          # 找到目标架构目录（如：armvirt/32）
+          TARGET_DIR=$(find . -mindepth 2 -maxdepth 2 -type d | head -n 1)
+          cd "$TARGET_DIR"
+          mkdir -p ../../../release
+          tar -czf ../../../release/onecloud-immortalwrt-${{ github.run_number }}.tar.gz ./*
+          echo "✅ 打包完成：onecloud-immortalwrt-${{ github.run_number }}.tar.gz"
 
       - name: 上传固件到 Actions Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: onecloud-immortalwrt-${{ github.run_id }}
-          path: openwrt/bin/targets/
-
-      - name: 删除旧版 Releases
-        uses: dev-drprasad/delete-older-releases@v0.3.3
-        with:
-          keep_latest: 1
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          path: openwrt/release/
 
       - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
+        if: success()
         with:
           tag_name: "onecloud-${{ github.run_number }}"
           name: "OneCloud ImmortalWrt Build #${{ github.run_number }}"
           body: |
-            🧊 **每月自动构建版本**
+            🎉 自动构建成功！
 
             ✅ 内核版本: ${{ github.event.inputs.kernel_version || '6.6' }}
             🕒 构建时间: ${{ github.run_started_at }}
+            📦 固件文件列表如下：
 
-            🌐 默认网络配置：
-            - IP：192.168.2.2  
-            - 网关：192.168.2.1  
-            - 用户名：root  
-            - 密码：空（留空登录）
+            - OneCloud ImmortalWrt 固件 (ARMv7)
+            - 默认 IP: 192.168.2.2
+            - 网关: 192.168.2.1
+            - 用户名: root
+            - 密码: 空（留空登录）
 
-            📦 固件文件请在下方下载：
+            💡 构建仓库: [${{ github.repository }}](https://github.com/${{ github.repository }})
           files: |
-            openwrt/bin/targets/**/*.img.gz
-            openwrt/bin/targets/**/*.bin
-            openwrt/bin/targets/**/*.manifest
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            openwrt/release/*.tar.gz
