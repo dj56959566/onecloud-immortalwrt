@@ -18,7 +18,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
@@ -26,9 +25,9 @@ jobs:
       - name: 设置构建环境
         run: |
           sudo apt update
-          sudo apt install -y build-essential ccache curl git unzip wget python3 python3-distutils
+          sudo apt install -y build-essential ccache curl git unzip wget python3
 
-      - name: 下载 ImmortalWrt 源码
+      - name: 下载源码
         run: |
           git clone https://github.com/immortalwrt/immortalwrt.git -b openwrt-24.10 openwrt
           cd openwrt
@@ -51,41 +50,35 @@ jobs:
           cd openwrt
           make -j$(nproc) || make -j1 V=s
 
-      - name: 打包固件压缩包
-        run: |
-          cd openwrt/bin/targets
-          # 找到目标架构目录（如：armvirt/32）
-          TARGET_DIR=$(find . -mindepth 2 -maxdepth 2 -type d | head -n 1)
-          cd "$TARGET_DIR"
-          mkdir -p ../../../release
-          tar -czf ../../../release/onecloud-immortalwrt-${{ github.run_number }}.tar.gz ./*
-          echo "✅ 打包完成：onecloud-immortalwrt-${{ github.run_number }}.tar.gz"
-
+            # 上传固件到 Actions Artifacts（保留临时文件供调试）
       - name: 上传固件到 Actions Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: onecloud-immortalwrt-${{ github.run_id }}
-          path: openwrt/release/
+          path: openwrt/bin/targets/
 
+      # 自动发布到 GitHub Releases（正式发布）
       - name: 发布到 GitHub Releases
         uses: softprops/action-gh-release@v2
-        if: success()
         with:
           tag_name: "onecloud-${{ github.run_number }}"
           name: "OneCloud ImmortalWrt Build #${{ github.run_number }}"
           body: |
-            🎉 自动构建成功！
+            🧊 **每月自动构建版本**
 
             ✅ 内核版本: ${{ github.event.inputs.kernel_version || '6.6' }}
             🕒 构建时间: ${{ github.run_started_at }}
-            📦 固件文件列表如下：
 
-            - OneCloud ImmortalWrt 固件 (ARMv7)
-            - 默认 IP: 192.168.2.2
-            - 网关: 192.168.2.1
-            - 用户名: root
-            - 密码: 空（留空登录）
+            🌐 默认网络配置：
+            - IP：192.168.2.2  
+            - 网关：192.168.2.1  
+            - 用户名：root  
+            - 密码：空（留空登录）
 
-            💡 构建仓库: [${{ github.repository }}](https://github.com/${{ github.repository }})
+            📦 固件文件请在下方下载：
           files: |
-            openwrt/release/*.tar.gz
+            openwrt/bin/targets/**/*.img.gz
+            openwrt/bin/targets/**/*.bin
+            openwrt/bin/targets/**/*.manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
