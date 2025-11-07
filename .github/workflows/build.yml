@@ -54,4 +54,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: onecloud-immortalwrt-${{ github.run_id }}
-          path: openwrt/bin/targets/
+          path: openwrt/bin/targets/ 设置成每个月发布一次且发布新的固件删除掉固件，同进也在GitHub Releases 页面（发布页）
