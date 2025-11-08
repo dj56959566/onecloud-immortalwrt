@@ -2,7 +2,7 @@ name: Build OneCloud ImmortalWrt (Kernel 6.6)
 
 on:
   schedule:
-    - cron: '0 16 * * *'  # 每天北京时间 00:00 自动构建（UTC+8）
+    - cron: '0 16 * * *'  # 每天北京时间 00:00 自动构建
   workflow_dispatch:
     inputs:
       kernel_version:
@@ -12,8 +12,8 @@ on:
         type: choice
         options:
           - 6.6
-          - 6.7
-          - 6.9
+          - 6.10
+          - 6.14
 
 jobs:
   build:
@@ -26,7 +26,7 @@ jobs:
       - name: 设置构建环境
         run: |
           sudo apt update
-          sudo apt install -y build-essential ccache curl git unzip wget python3 gzip xz-utils
+          sudo apt install -y build-essential ccache curl git unzip wget python3
 
       - name: 下载源码
         run: |
@@ -41,16 +41,9 @@ jobs:
           cd openwrt
           ../diy.sh
 
-      # ✅ 添加强制启用 ext4 镜像配置
-      - name: 启用 ext4 镜像支持
+      - name: 生成默认配置
         run: |
           cd openwrt
-          cat >> .config <<EOF
-          CONFIG_TARGET_ROOTFS_EXT4=y
-          CONFIG_TARGET_ROOTFS_SQUASHFS=y
-          CONFIG_TARGET_EXT4_BLOCKSIZE_4096=y
-          CONFIG_TARGET_IMAGES_GZIP=y
-          EOF
           make defconfig
 
       - name: 编译固件
@@ -58,56 +51,24 @@ jobs:
           cd openwrt
           make -j$(nproc) || make -j1 V=s
 
-      # ✅ 打包线刷镜像
-      - name: 打包线刷镜像
+      - name: 打包固件文件
         run: |
-          cd openwrt/bin/targets/*/*
           mkdir -p release
+          cp -r openwrt/bin/targets/*/* release/
+          cd release
+          tar -czf onecloud-immortalwrt-${{ github.run_id }}.tar.gz *
 
-          # 找到 ext4 镜像
-          IMG=$(ls *-ext4-sysupgrade.img.gz | head -n 1 || true)
-          if [ -z "$IMG" ]; then
-            echo "⚠️ 未找到 ext4 镜像，尝试从 squashfs 镜像转换"
-            IMG=$(ls *-squashfs-sysupgrade.bin | head -n 1 || true)
-          fi
-
-          if [ -z "$IMG" ]; then
-            echo "❌ 未找到任何可用镜像，无法生成线刷包"
-            exit 1
-          fi
-
-          # 解压/拷贝 rootfs
-          if [[ "$IMG" == *.gz ]]; then
-            gunzip -c "$IMG" > rootfs.img
-          else
-            cp "$IMG" rootfs.img
-          fi
-
-          echo "🧩 生成 eMMC 线刷镜像..."
-          dd if=/dev/zero of=onecloud_emmc_flash.img bs=1M count=2048
-          parted onecloud_emmc_flash.img --script mklabel gpt
-          parted onecloud_emmc_flash.img --script mkpart boot ext4 1MiB 64MiB
-          parted onecloud_emmc_flash.img --script mkpart root ext4 64MiB 100%
-          dd if=rootfs.img of=onecloud_emmc_flash.img bs=1M seek=64 conv=fsync
-
-          gzip -c onecloud_emmc_flash.img > release/onecloud_emmc_flash_${{ github.event.inputs.kernel_version || '6.6' }}.img.gz
-          echo "✅ 线刷包生成完成"
-
-      - name: 发布到 GitHub Releases
+      - name: 发布到 GitHub Release
         uses: softprops/action-gh-release@v2
-        if: success()
         with:
-          tag_name: "build-${{ github.run_id }}"
-          name: "OneCloud ImmortalWrt 线刷包 (Kernel ${{ github.event.inputs.kernel_version || '6.6' }})"
+          tag_name: "build-${{ github.run_number }}"
+          name: "OneCloud ImmortalWrt 构建 #${{ github.run_number }}"
           body: |
-            自动构建的 OneCloud ImmortalWrt 线刷包  
-            - 内核版本：${{ github.event.inputs.kernel_version || '6.6' }}  
-            - 编译时间：${{ github.run_started_at }}  
-            - 设备：OneCloud  
-            - 分支：openwrt-24.10  
-            - 镜像格式：`.img.gz`（可直接 dd 或 USB Burning Tool 刷入 eMMC）
+            ✅ 自动构建成功
+            - 设备：OneCloud
+            - 内核版本：${{ github.event.inputs.kernel_version }}
+            - 构建时间：${{ github.run_started_at }}
           files: |
-            openwrt/bin/targets/*/*/release/*.img.gz
-
+            release/onecloud-immortalwrt-${{ github.run_id }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
