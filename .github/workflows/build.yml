@@ -2,7 +2,7 @@ name: Build OneCloud ImmortalWrt (Kernel 6.6)
 
 on:
   schedule:
-    - cron: '0 16 * * *'  # 每天北京时间 00:00 自动构建
+    - cron: '0 0 1 * *'  # 每月的第一天的 00:00 自动构建
   workflow_dispatch:
     inputs:
       kernel_version:
@@ -27,6 +27,12 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y build-essential ccache curl git unzip wget python3
+
+      - name: 安装 GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /usr/share/keyrings/github.asc > /dev/null
+          sudo apt update
+          sudo apt install gh
 
       - name: 下载源码
         run: |
@@ -57,6 +63,17 @@ jobs:
           cp -r openwrt/bin/targets/*/* release/
           cd release
           tar -czf onecloud-immortalwrt-${{ github.run_id }}.tar.gz *
+
+      - name: 删除旧的 GitHub Release
+        run: |
+          # 获取旧的构建文件并删除
+          releases=$(gh release list --repo ${{ github.repository }} --json tagName,createdAt --jq 'sort_by(.createdAt) | .[0:-1] | .[].tagName')
+          for release in $releases; do
+            echo "删除旧构建：$release"
+            gh release delete $release --repo ${{ github.repository }} --yes
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 发布到 GitHub Release
         uses: softprops/action-gh-release@v2
